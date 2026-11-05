@@ -2279,6 +2279,16 @@ void decideFragmentType(
       fragment);
 }
 
+// The connector partition type of 'node', read through project, filter and
+// sort. A fragment that reads it runs one task per partition.
+const connector::PartitionType* partitionTypeBelow(NodeCP node) {
+  while (node->is(NodeType::kProject) || node->is(NodeType::kFilter) ||
+         node->is(NodeType::kSort)) {
+    node = node->inputs()[0];
+  }
+  return node->physicalProperties().globalPartition.partitionType;
+}
+
 const connector::PartitionType* commonFragmentPartitionType(NodeCP node) {
   if (node->is(NodeType::kExchange)) {
     const auto* exchange = node->as<Exchange>();
@@ -2622,9 +2632,9 @@ velox::core::PlanNodePtr Emitter::closeWriterFragment(
   VELOX_CHECK(
       fragmentState_.fragment == &state.fragment,
       "Split writer fragment lost its caller-owned state");
-  // A connector-partitioned input runs one writer task per partition.
-  if (const auto* partitionType =
-          input->physicalProperties().globalPartition.partitionType) {
+  // A connector-partitioned input runs one writer task per partition, as a
+  // range-sorted write reads a range exchange below its sort.
+  if (const auto* partitionType = partitionTypeBelow(input)) {
     state.fragment.type = velox::core::StageType::kFixed;
     state.fragment.numRemotePartitions = partitionType->numPartitions();
   }
