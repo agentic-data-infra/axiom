@@ -2680,14 +2680,20 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
   velox::core::PlanNodePtr input = emit(tableWrite.input());
 
   // A bucketed write reads a bucket exchange (physical planning inserts one
-  // unless the source is already co-bucketed), and its writer task count must
-  // equal that exchange's partition count: one task per bucket group, each
-  // producing one bucket file. The fragment runs no grouped scan, so this is a
-  // task count, not grouped execution.
-  if (distributed && !layout->partitionColumns().empty() &&
-      tableWrite.input()->is(NodeType::kExchange)) {
+  // unless the source is already co-bucketed), and a range-sorted write reads
+  // a range exchange below its sort. The writer task count must equal that
+  // exchange's partition count: one task per bucket group or range, each
+  // producing one file. The fragment runs no grouped scan, so this is a task
+  // count, not grouped execution.
+  NodeCP writerInput = tableWrite.input();
+  while (writerInput->is(NodeType::kProject) ||
+         writerInput->is(NodeType::kFilter) ||
+         writerInput->is(NodeType::kSort)) {
+    writerInput = writerInput->inputs()[0];
+  }
+  if (distributed && writerInput->is(NodeType::kExchange)) {
     const auto& exchangeType =
-        tableWrite.input()->physicalProperties().globalPartition.partitionType;
+        writerInput->physicalProperties().globalPartition.partitionType;
     if (exchangeType != nullptr) {
       writerFragment.type = FragmentType::kFixed;
       writerFragment.numRemotePartitions = exchangeType->numPartitions();
