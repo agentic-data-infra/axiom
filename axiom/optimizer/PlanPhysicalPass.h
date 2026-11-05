@@ -18,6 +18,7 @@
 
 #include "axiom/optimizer/Builder.h"
 #include "axiom/optimizer/EstimateProvider.h"
+#include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/optimizer/Node.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/OptimizerSession.h"
@@ -66,7 +67,8 @@ class PlanPhysicalPass {
       const OptimizerSession& session,
       const OptimizerOptions& options,
       int32_t numWorkers,
-      int32_t numDrivers);
+      int32_t numDrivers,
+      const MultiFragmentPlan::SortPartitioner& sortPartitioner = {});
 };
 
 } // namespace facebook::axiom::optimizer

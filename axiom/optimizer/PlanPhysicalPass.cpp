@@ -1243,7 +1243,8 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       bool oneTask,
       std::function<NodeCP(NodeCP)> replicate = nullptr,
       Partitioning statePartitioning = {},
-      bool gatherOntoOneDriver = false)
+      bool gatherOntoOneDriver = false,
+      MultiFragmentPlan::SortPartitioner sortPartitioner = {})
       : NodeRewriter(builder),
         session_{session},
         options_{options},
@@ -1253,6 +1254,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
         replicate_{std::move(replicate)},
         statePartitioning_{std::move(statePartitioning)},
         gatherOntoOneDriver_{gatherOntoOneDriver},
+        sortPartitioner_{std::move(sortPartitioner)},
         exprFactory_{builder},
         simplifier_{simplifier},
         estimateProvider_{estimateProvider} {}
@@ -2240,6 +2242,33 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
              PropertyScope::kGlobal, orderKeys, orderTypes)});
   }
 
+  // The sort 'node' reaches through row-wise nodes only, or null. Each task can
+  // write such a sort's output as it arrives, keeping the order across tasks.
+  static const Sort* sortUnderRowWiseNodes(NodeCP node) {
+    while (node->is(NodeType::kProject) || node->is(NodeType::kFilter)) {
+      node = node->inputs()[0];
+    }
+    return node->is(NodeType::kSort) ? node->as<Sort>() : nullptr;
+  }
+
+  // The range partitioning for 'sort', or null if the caller has none for it.
+  const connector::PartitionType* sortPartitionType(const Sort& sort) {
+    const auto* key = sort.orderKeys()[0];
+    if (!sortPartitioner_ || !key->is(PlanType::kColumnExpr)) {
+      return nullptr;
+    }
+    const auto order = sort.orderTypes()[0];
+    auto type = sortPartitioner_(
+        *key->value().type,
+        order == OrderType::kAscNullsFirst ||
+            order == OrderType::kAscNullsLast,
+        order == OrderType::kAscNullsFirst ||
+            order == OrderType::kDescNullsFirst,
+        numWorkers_);
+    return type == nullptr ? nullptr
+                           : queryCtx()->registerPartitionType(std::move(type));
+  }
+
   NodeCP partition(
       NodeCP input,
       const ExprVector& keys,
@@ -2972,6 +3001,13 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   // streams globally; an existing driver or task gather skips its merge.
   NodeCP rewriteSort(const Sort* node, NoContext& context) override {
     NodeCP input = rewrite(node->input(), context);
+    const auto* rangeType =
+        node == writtenSort_ && numWorkers_ > 1 && !holdsAllRows(input)
+        ? sortPartitionType(*node)
+        : nullptr;
+    if (rangeType != nullptr) {
+      input = partitionTo(input, {node->orderKeys()[0]}, rangeType);
+    }
     const bool needsDriverMerge = numDrivers_ > 1 &&
         !input->physicalProperties().coLocates(
             PropertyScope::kDriver, /*keys=*/{});
@@ -2982,7 +3018,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
     if (needsDriverMerge) {
       sorted = driverGatherMerge(sorted, node->orderKeys(), node->orderTypes());
     }
-    if (numWorkers_ == 1 || holdsAllRows(input)) {
+    if (numWorkers_ == 1 || rangeType != nullptr || holdsAllRows(input)) {
       return sorted;
     }
     return gatherMerge(sorted, node->orderKeys(), node->orderTypes());
@@ -3532,6 +3568,10 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   // worker.
   NodeCP rewriteTableWrite(const TableWrite* node, NoContext& context)
       override {
+    if (node->kind() != connector::WriteKind::kDelete &&
+        node->table()->primaryLayout()->partitionColumns().empty()) {
+      writtenSort_ = sortUnderRowWiseNodes(node->input());
+    }
     NodeCP newInput = rewrite(node->input(), context);
     if (node->kind() == connector::WriteKind::kDelete) {
       return rewriteDelete(*node, newInput);
@@ -3565,6 +3605,9 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   const Partitioning statePartitioning_;
   // True when a gather between workers starts a plan that runs on one driver.
   const bool gatherOntoOneDriver_;
+  const MultiFragmentPlan::SortPartitioner sortPartitioner_;
+  // The sort under the table write, if any, which may range partition.
+  const Sort* writtenSort_{nullptr};
   ExprFactory exprFactory_;
   ExprSimplifier& simplifier_;
 
@@ -3585,7 +3628,8 @@ NodeCP PlanPhysicalPass::run(
     const OptimizerSession& session,
     const OptimizerOptions& options,
     int32_t numWorkers,
-    int32_t numDrivers) {
+    int32_t numDrivers,
+    const MultiFragmentPlan::SortPartitioner& sortPartitioner) {
   VELOX_USER_CHECK_GE(numWorkers, 1, "numWorkers must be at least 1");
   VELOX_USER_CHECK_GE(numDrivers, 1, "numDrivers must be at least 1");
 
@@ -3598,7 +3642,11 @@ NodeCP PlanPhysicalPass::run(
       options,
       numWorkers,
       numDrivers,
-      /*oneTask=*/numWorkers == 1};
+      /*oneTask=*/numWorkers == 1,
+      /*replicate=*/nullptr,
+      /*statePartitioning=*/{},
+      /*gatherOntoOneDriver=*/false,
+      sortPartitioner};
   return rewriter.rewrite(root);
 }
 
