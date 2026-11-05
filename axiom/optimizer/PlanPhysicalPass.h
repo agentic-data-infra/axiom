@@ -68,7 +68,8 @@ class PlanPhysicalPass {
       const OptimizerOptions& options,
       int32_t numWorkers,
       int32_t numDrivers,
-      const MultiFragmentPlan::SortPartitioner& sortPartitioner = {});
+      const MultiFragmentPlan::SortPartitioner& sortPartitioner = {},
+      bool remoteOutput = false);
 };
 
 } // namespace facebook::axiom::optimizer

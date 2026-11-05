@@ -1262,6 +1262,16 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   // Re-exposes the rewrite(NodeCP) overload hidden by the override below.
   using NodeRewriter<>::rewrite;
 
+  // Rewrites the plan 'root'. With 'remoteOutput' no task gathers the result,
+  // so a sort at the root may range partition, like one under a table write:
+  // the caller reads the tasks in partition order.
+  NodeCP rewriteRoot(NodeCP root, bool remoteOutput) {
+    if (remoteOutput) {
+      rangeSort_ = sortUnderRowWiseNodes(root);
+    }
+    return rewrite(root);
+  }
+
   // Rewriting a node is a pure function of the node, so descend each node
   // once.
   NodeCP rewrite(NodeCP node, NoContext& context) override {
@@ -3002,7 +3012,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   NodeCP rewriteSort(const Sort* node, NoContext& context) override {
     NodeCP input = rewrite(node->input(), context);
     const auto* rangeType =
-        node == writtenSort_ && numWorkers_ > 1 && !holdsAllRows(input)
+        node == rangeSort_ && numWorkers_ > 1 && !holdsAllRows(input)
         ? sortPartitionType(*node)
         : nullptr;
     if (rangeType != nullptr) {
@@ -3570,7 +3580,7 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       override {
     if (node->kind() != connector::WriteKind::kDelete &&
         node->table()->primaryLayout()->partitionColumns().empty()) {
-      writtenSort_ = sortUnderRowWiseNodes(node->input());
+      rangeSort_ = sortUnderRowWiseNodes(node->input());
     }
     NodeCP newInput = rewrite(node->input(), context);
     if (node->kind() == connector::WriteKind::kDelete) {
@@ -3606,8 +3616,9 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   // True when a gather between workers starts a plan that runs on one driver.
   const bool gatherOntoOneDriver_;
   const MultiFragmentPlan::SortPartitioner sortPartitioner_;
-  // The sort under the table write, if any, which may range partition.
-  const Sort* writtenSort_{nullptr};
+  // The sort under the table write or at the root with remote output, if any,
+  // which may range partition.
+  const Sort* rangeSort_{nullptr};
   ExprFactory exprFactory_;
   ExprSimplifier& simplifier_;
 
@@ -3629,7 +3640,8 @@ NodeCP PlanPhysicalPass::run(
     const OptimizerOptions& options,
     int32_t numWorkers,
     int32_t numDrivers,
-    const MultiFragmentPlan::SortPartitioner& sortPartitioner) {
+    const MultiFragmentPlan::SortPartitioner& sortPartitioner,
+    bool remoteOutput) {
   VELOX_USER_CHECK_GE(numWorkers, 1, "numWorkers must be at least 1");
   VELOX_USER_CHECK_GE(numDrivers, 1, "numDrivers must be at least 1");
 
@@ -3647,7 +3659,7 @@ NodeCP PlanPhysicalPass::run(
       /*statePartitioning=*/{},
       /*gatherOntoOneDriver=*/false,
       sortPartitioner};
-  return rewriter.rewrite(root);
+  return rewriter.rewriteRoot(root, remoteOutput);
 }
 
 } // namespace facebook::axiom::optimizer

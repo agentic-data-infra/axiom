@@ -225,9 +225,11 @@ class MultiFragmentPlan {
     int32_t firstPlanNodeId{0};
 
     /// Makes the range partitioning for a global sort that feeds a table write,
-    /// so that each writer sorts one range rather than all rows passing through
-    /// one task. Called with the first sort key's type and order and the number
-    /// of partitions. Returning null, or leaving this unset, keeps the merge
+    /// or the query result with 'remoteOutput', so that each task sorts one
+    /// range rather than all rows passing through one task. The caller reads a
+    /// result's tasks in partition order. Setting this keeps the full
+    /// 'maxRemotePartitions'. Called with the first sort key's type and order
+    /// and the number of partitions. Returning null, or leaving this unset, keeps the merge
     /// onto one task.
     SortPartitioner sortPartitioner;
 

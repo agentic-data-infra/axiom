@@ -2981,6 +2981,12 @@ std::vector<velox::core::Stage> Emitter::emitFragments(
       };
       decideFragmentType(
           rootType, options_.maxRemotePartitions, hashPartitionCount(), top);
+      // A range-partitioned sort at the root runs one task per range.
+      if (const auto* partitionType = partitionTypeBelow(root);
+          partitionType != nullptr &&
+          top.type == velox::core::StageType::kFixed) {
+        top.numRemotePartitions = partitionType->numPartitions();
+      }
       outputProjection = emitRoot(root, outputColumns, outputNames);
       top.plan = makeClientOutput(outputProjection);
     } else if (gatherForOutput) {

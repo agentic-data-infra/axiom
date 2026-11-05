@@ -256,9 +256,11 @@ NodeCP Optimizer::planTo(
   // Decide the width before physical planning, which reads maxRemotePartitions
   // to shape exchanges and to cost broadcasts. A write keeps the full width:
   // one that reads little can still need more memory than one worker has, as in
-  // an aggregation into many groups.
+  // an aggregation into many groups. So does a plan with a sort partitioner,
+  // whose ranges are the caller's and may outnumber the workers chosen here.
   planOptions_ = *options;
-  if (!plan_.is(logical_plan::NodeKind::kTableWrite)) {
+  if (!plan_.is(logical_plan::NodeKind::kTableWrite) &&
+      !planOptions_.sortPartitioner) {
     planOptions_.maxRemotePartitions = chooseNumWorkers(
         node, session_.options(), options->maxRemotePartitions);
   }
@@ -272,7 +274,8 @@ NodeCP Optimizer::planTo(
       session_.options(),
       planOptions_.maxRemotePartitions,
       planOptions_.maxLocalPartitions,
-      planOptions_.sortPartitioner);
+      planOptions_.sortPartitioner,
+      planOptions_.remoteOutput);
   notifyAfterPass(Pass::kPlanPhysical, node);
   return node;
 }
