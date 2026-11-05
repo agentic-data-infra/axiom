@@ -19,10 +19,83 @@
 #include <numeric>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/serialization/Serializable.h"
 
 namespace facebook::axiom::connector::file {
 
 using namespace facebook::velox;
+
+folly::dynamic FileSplit::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "FileSplit";
+  obj["connectorId"] = connectorId;
+  obj["filePath"] = filePath;
+  return obj;
+}
+
+std::shared_ptr<FileSplit> FileSplit::create(const folly::dynamic& obj) {
+  return std::make_shared<FileSplit>(
+      obj["connectorId"].asString(), obj["filePath"].asString());
+}
+
+void FileSplit::registerSerDe() {
+  DeserializationRegistryForSharedPtr().Register("FileSplit", FileSplit::create);
+}
+
+folly::dynamic FileColumnHandle::serialize() const {
+  auto obj = serializeBase("FileColumnHandle");
+  obj["columnName"] = name_;
+  return obj;
+}
+
+velox::connector::ColumnHandlePtr FileColumnHandle::create(
+    const folly::dynamic& obj,
+    void* /*context*/) {
+  return std::make_shared<FileColumnHandle>(obj["columnName"].asString());
+}
+
+void FileColumnHandle::registerSerDe() {
+  DeserializationWithContextRegistryForSharedPtr().Register(
+      "FileColumnHandle", FileColumnHandle::create);
+}
+
+folly::dynamic FileTableHandle::serialize() const {
+  auto obj = serializeBase("FileTableHandle");
+  obj["schema"] = schemaTableName_.schema;
+  obj["table"] = schemaTableName_.table;
+  obj["filePath"] = filePath_;
+  obj["filePaths"] = ISerializable::serialize(filePaths_);
+  obj["suffix"] = suffix_;
+  obj["fullSchema"] = fullSchema_->serialize();
+  folly::dynamic columns = folly::dynamic::array;
+  for (const auto& column : columnHandles_) {
+    columns.push_back(column->name());
+  }
+  obj["columns"] = std::move(columns);
+  return obj;
+}
+
+velox::connector::ConnectorTableHandlePtr FileTableHandle::create(
+    const folly::dynamic& obj,
+    void* context) {
+  std::vector<velox::connector::ColumnHandlePtr> columns;
+  for (const auto& column : obj["columns"]) {
+    columns.push_back(std::make_shared<FileColumnHandle>(column.asString()));
+  }
+  return std::make_shared<FileTableHandle>(
+      obj["connectorId"].asString(),
+      SchemaTableName{obj["schema"].asString(), obj["table"].asString()},
+      obj["filePath"].asString(),
+      ISerializable::deserialize<std::vector<std::string>>(obj["filePaths"]),
+      obj["suffix"].asString(),
+      ISerializable::deserialize<RowType>(obj["fullSchema"], context),
+      std::move(columns));
+}
+
+void FileTableHandle::registerSerDe() {
+  DeserializationWithContextRegistryForSharedPtr().Register(
+      "FileTableHandle", FileTableHandle::create);
+}
 
 bool FileTable::isValidName(std::string_view name) {
   return !name.empty() && name.find_first_of("$./") == std::string_view::npos;

@@ -16,12 +16,23 @@
 
 #include "axiom/connectors/file/FileConnector.h"
 
+#include <mutex>
+
 #include "axiom/connectors/file/FileHandler.h"
 #include "axiom/connectors/file/core/FileTable.h"
 #include "velox/common/Casts.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::axiom::connector::file {
+
+void FileConnector::registerSerDe() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+    FileTableHandle::registerSerDe();
+    FileColumnHandle::registerSerDe();
+    FileSplit::registerSerDe();
+  });
+}
 
 std::unique_ptr<velox::connector::DataSource> FileConnector::createDataSource(
     const velox::RowTypePtr& outputType,

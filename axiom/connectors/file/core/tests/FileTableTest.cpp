@@ -154,5 +154,44 @@ TEST_F(FileTableTest, parseName) {
   }
 }
 
+TEST_F(FileTableTest, serde) {
+  FileConnector::registerSerDe();
+  Type::registerSerDe();
+
+  FileTableHandle handle(
+      kConnectorId,
+      {"parquet", "/data/"},
+      "/data/",
+      {"/data/a.parquet", "/data/b.parquet"},
+      "row_groups",
+      ROW({"id"}, {BIGINT()}),
+      {std::make_shared<FileColumnHandle>("id")});
+  auto deserialized =
+      ISerializable::deserialize<velox::connector::ConnectorTableHandle>(
+          handle.serialize(), pool());
+  const auto* table = deserialized->asChecked<FileTableHandle>();
+  EXPECT_EQ(table->connectorId(), kConnectorId);
+  EXPECT_EQ(table->schemaTableName().schema, "parquet");
+  EXPECT_EQ(table->filePath(), "/data/");
+  EXPECT_EQ(table->filePaths(), handle.filePaths());
+  EXPECT_EQ(table->suffix(), "row_groups");
+  EXPECT_EQ(*table->fullSchema(), *handle.fullSchema());
+  ASSERT_EQ(table->columnHandles().size(), 1);
+  EXPECT_EQ(table->columnHandles()[0]->name(), "id");
+
+  FileColumnHandle column("id");
+  EXPECT_EQ(
+      ISerializable::deserialize<velox::connector::ColumnHandle>(
+          column.serialize(), pool())
+          ->name(),
+      "id");
+
+  FileSplit split(kConnectorId, "/data/a.parquet");
+  auto copy = ISerializable::deserialize<velox::connector::ConnectorSplit>(
+      split.serialize());
+  EXPECT_EQ(copy->connectorId, kConnectorId);
+  EXPECT_EQ(copy->asChecked<FileSplit>()->filePath, split.filePath);
+}
+
 } // namespace
 } // namespace facebook::axiom::connector::file

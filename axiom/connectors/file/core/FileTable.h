@@ -33,6 +33,12 @@ struct FileSplit : public velox::connector::ConnectorSplit {
   FileSplit(const std::string& connectorId, std::string filePath)
       : ConnectorSplit(connectorId), filePath(std::move(filePath)) {}
 
+  folly::dynamic serialize() const override;
+
+  static std::shared_ptr<FileSplit> create(const folly::dynamic& obj);
+
+  static void registerSerDe();
+
   const std::string filePath;
 };
 
@@ -44,6 +50,14 @@ class FileColumnHandle : public velox::connector::ColumnHandle {
   const std::string& name() const override {
     return name_;
   }
+
+  folly::dynamic serialize() const override;
+
+  static velox::connector::ColumnHandlePtr create(
+      const folly::dynamic& obj,
+      void* context);
+
+  static void registerSerDe();
 
  private:
   const std::string name_;
@@ -110,6 +124,14 @@ class FileTableHandle : public velox::connector::ConnectorTableHandle {
   const std::vector<velox::connector::ColumnHandlePtr>& columnHandles() const {
     return columnHandles_;
   }
+
+  folly::dynamic serialize() const override;
+
+  static velox::connector::ConnectorTableHandlePtr create(
+      const folly::dynamic& obj,
+      void* context);
+
+  static void registerSerDe();
 
  private:
   const SchemaTableName schemaTableName_;
