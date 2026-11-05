@@ -26,6 +26,11 @@ class FileConnector : public velox::connector::Connector {
  public:
   explicit FileConnector(const std::string& id) : Connector(id) {}
 
+  /// Registers the deserializers of the connector's table handle, column
+  /// handle and split, so that plans and splits can cross processes. Safe to
+  /// call more than once.
+  static void registerSerDe();
+
   /// Creates a DataSource by dispatching to the file-type-specific
   /// handler identified by the table handle's schema name.
   std::unique_ptr<velox::connector::DataSource> createDataSource(
