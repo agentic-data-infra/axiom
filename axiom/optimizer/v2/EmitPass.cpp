@@ -2375,6 +2375,18 @@ void decideFragmentType(
       fragment);
 }
 
+// The partition type of the exchange 'node' reads through project, filter and
+// sort nodes, or null. A fragment that reads it runs one task per partition.
+const connector::PartitionType* exchangePartitionTypeBelow(NodeCP node) {
+  while (node->is(NodeType::kProject) || node->is(NodeType::kFilter) ||
+         node->is(NodeType::kSort)) {
+    node = node->inputs()[0];
+  }
+  return node->is(NodeType::kExchange)
+      ? node->physicalProperties().globalPartition.partitionType
+      : nullptr;
+}
+
 const connector::PartitionType* commonFragmentPartitionType(NodeCP node) {
   if (node->is(NodeType::kExchange)) {
     return nullptr;
@@ -2685,16 +2697,9 @@ velox::core::PlanNodePtr Emitter::emitTableWrite(const TableWrite& tableWrite) {
   // exchange's partition count: one task per bucket group or range, each
   // producing one file. The fragment runs no grouped scan, so this is a task
   // count, not grouped execution.
-  NodeCP writerInput = tableWrite.input();
-  while (writerInput->is(NodeType::kProject) ||
-         writerInput->is(NodeType::kFilter) ||
-         writerInput->is(NodeType::kSort)) {
-    writerInput = writerInput->inputs()[0];
-  }
-  if (distributed && writerInput->is(NodeType::kExchange)) {
-    const auto& exchangeType =
-        writerInput->physicalProperties().globalPartition.partitionType;
-    if (exchangeType != nullptr) {
+  if (distributed) {
+    if (const auto* exchangeType =
+            exchangePartitionTypeBelow(tableWrite.input())) {
       writerFragment.type = FragmentType::kFixed;
       writerFragment.numRemotePartitions = exchangeType->numPartitions();
     }
@@ -2959,6 +2964,12 @@ std::vector<ExecutableFragment> Emitter::emitFragments(
       };
       decideFragmentType(
           rootType, options_.maxRemotePartitions, hashPartitionCount(), top);
+      // A range-partitioned sort at the root runs one task per range.
+      if (const auto* exchangeType = exchangePartitionTypeBelow(root);
+          exchangeType != nullptr && options_.maxRemotePartitions > 1) {
+        top.type = FragmentType::kFixed;
+        top.numRemotePartitions = exchangeType->numPartitions();
+      }
       outputProjection = emitRoot(root, outputColumns, outputNames);
       top.fragment.planNode = makeClientOutput(outputProjection);
     } else if (gatherForOutput) {
