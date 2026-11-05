@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "axiom/optimizer/MultiFragmentPlan.h"
 #include "axiom/optimizer/OptimizerOptions.h"
 #include "axiom/optimizer/v2/Builder.h"
 #include "axiom/optimizer/v2/Node.h"
@@ -61,7 +62,8 @@ class PlanPhysicalPass {
       velox::core::ExpressionEvaluator& evaluator,
       const OptimizerOptions& options,
       int32_t numWorkers,
-      int32_t numDrivers);
+      int32_t numDrivers,
+      const MultiFragmentPlan::SortPartitioner& sortPartitioner = {});
 };
 
 } // namespace facebook::axiom::optimizer::v2

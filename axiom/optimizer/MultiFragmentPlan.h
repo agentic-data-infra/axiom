@@ -192,6 +192,14 @@ struct ExecutableFragment {
 /// in each fragment.
 class MultiFragmentPlan {
  public:
+  /// See 'Options::sortPartitioner'.
+  using SortPartitioner =
+      std::function<std::shared_ptr<const connector::PartitionType>(
+          const velox::Type& keyType,
+          bool ascending,
+          bool nullsFirst,
+          int32_t numPartitions)>;
+
   /// Describes options for running a MultiFragmentPlan.
   struct Options {
     /// Query id used as a prefix for tasks ids.
@@ -221,6 +229,13 @@ class MultiFragmentPlan {
     /// collect results onto a single node. With a single worker, no
     /// additional nodes are added.
     bool remoteOutput{false};
+
+    /// Makes the range partitioning for a global sort that feeds a table write,
+    /// so that each writer sorts one range rather than all rows passing through
+    /// one task. Called with the first sort key's type and order and the number
+    /// of partitions. Returning null, or leaving this unset, keeps the merge
+    /// onto one task.
+    SortPartitioner sortPartitioner;
 
     /// Returns options for single-node, single-threaded local execution.
     /// Used by constant folding and join sampling which always run via

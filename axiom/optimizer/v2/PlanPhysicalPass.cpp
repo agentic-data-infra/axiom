@@ -742,11 +742,13 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       ExprSimplifier& simplifier,
       const OptimizerOptions& options,
       int32_t numWorkers,
-      int32_t numDrivers)
+      int32_t numDrivers,
+      const MultiFragmentPlan::SortPartitioner& sortPartitioner = {})
       : NodeRewriter(builder),
         options_{options},
         numWorkers_{numWorkers},
         numDrivers_{numDrivers},
+        sortPartitioner_{sortPartitioner},
         exprFactory_{builder},
         simplifier_{simplifier} {}
 
@@ -1085,6 +1087,33 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   // Remote exchanges that unconditionally establish a partitioning on 'input'.
   NodeCP gather(NodeCP input) {
     return builder().make<Exchange>({input, Partitioning::globalGather()});
+  }
+
+  // The sort 'node' reaches through row-wise nodes only, or null. Each task can
+  // write such a sort's output as it arrives, keeping the order across tasks.
+  static const Sort* sortUnderRowWiseNodes(NodeCP node) {
+    while (node->is(NodeType::kProject) || node->is(NodeType::kFilter)) {
+      node = node->inputs()[0];
+    }
+    return node->is(NodeType::kSort) ? node->as<Sort>() : nullptr;
+  }
+
+  // The range partitioning for 'sort', or null if the caller has none for it.
+  const connector::PartitionType* sortPartitionType(const Sort& sort) {
+    const auto* key = sort.orderKeys()[0];
+    if (!sortPartitioner_ || !key->is(PlanType::kColumnExpr)) {
+      return nullptr;
+    }
+    const auto order = sort.orderTypes()[0];
+    auto type = sortPartitioner_(
+        *key->value().type,
+        order == OrderType::kAscNullsFirst ||
+            order == OrderType::kAscNullsLast,
+        order == OrderType::kAscNullsFirst ||
+            order == OrderType::kDescNullsFirst,
+        numWorkers_);
+    return type == nullptr ? nullptr
+                           : queryCtx()->registerPartitionType(std::move(type));
   }
 
   // An order-preserving gather: merges the sorted per-task streams (the input
@@ -1653,6 +1682,14 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
       return builder().make<Sort>(
           {input, node->orderKeys(), node->orderTypes()});
     }
+    if (node == writtenSort_) {
+      if (const auto* rangeType = sortPartitionType(*node)) {
+        return builder().make<Sort>(
+            {partitionTo(input, {node->orderKeys()[0]}, rangeType),
+             node->orderKeys(),
+             node->orderTypes()});
+      }
+    }
     NodeCP partialSort =
         builder().make<Sort>({input, node->orderKeys(), node->orderTypes()});
     return gatherMerge(partialSort, node->orderKeys(), node->orderTypes());
@@ -1873,6 +1910,10 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   // which writes no columns and so has no key to shuffle on.
   NodeCP rewriteTableWrite(const TableWrite* node, NoContext& context)
       override {
+    if (node->kind() != connector::WriteKind::kDelete &&
+        node->table()->layouts().front()->partitionColumns().empty()) {
+      writtenSort_ = sortUnderRowWiseNodes(node->input());
+    }
     NodeCP newInput = rewrite(node->input(), context);
     if (numWorkers_ > 1 && node->kind() != connector::WriteKind::kDelete) {
       const auto* layout = node->table()->layouts().front();
@@ -1923,6 +1964,9 @@ class PhysicalPlanRewriter : public NodeRewriter<> {
   // separately.
   const int32_t numWorkers_;
   const int32_t numDrivers_;
+  const MultiFragmentPlan::SortPartitioner sortPartitioner_;
+  // The sort under the table write, if any, which may range partition.
+  const Sort* writtenSort_{nullptr};
   ExprFactory exprFactory_;
   ExprSimplifier& simplifier_;
 
@@ -1942,13 +1986,14 @@ NodeCP PlanPhysicalPass::run(
     velox::core::ExpressionEvaluator& evaluator,
     const OptimizerOptions& options,
     int32_t numWorkers,
-    int32_t numDrivers) {
+    int32_t numDrivers,
+    const MultiFragmentPlan::SortPartitioner& sortPartitioner) {
   VELOX_USER_CHECK_GE(numWorkers, 1, "numWorkers must be at least 1");
   VELOX_USER_CHECK_GE(numDrivers, 1, "numDrivers must be at least 1");
 
   ExprSimplifier simplifier{builder, evaluator};
   PhysicalPlanRewriter rewriter{
-      builder, simplifier, options, numWorkers, numDrivers};
+      builder, simplifier, options, numWorkers, numDrivers, sortPartitioner};
   return rewriter.rewrite(root);
 }
 

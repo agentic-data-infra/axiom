@@ -267,7 +267,8 @@ NodeCP Optimizer::planTo(
       evaluator_,
       session_.options(),
       planOptions_.maxRemotePartitions,
-      planOptions_.maxLocalPartitions);
+      planOptions_.maxLocalPartitions,
+      planOptions_.sortPartitioner);
   notifyAfterPass(Pass::kPlanPhysical, node);
   return node;
 }
