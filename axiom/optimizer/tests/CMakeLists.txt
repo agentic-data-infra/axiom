@@ -147,6 +147,7 @@ if(AXIOM_BUILD_TESTING)
     RankingTest.cpp
     RowLevelDeleteTest.cpp
     SetTest.cpp
+    SortPartitionerTest.cpp
     SubfieldTest.cpp
     SubqueryTest.cpp
     SubqueryFoldTest.cpp
